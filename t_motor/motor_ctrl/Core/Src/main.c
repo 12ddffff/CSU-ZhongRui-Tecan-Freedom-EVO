@@ -63,6 +63,11 @@ float target_angle = 0;
 float ENCODER_CPR = 2800.0f;
 float total_angle; //总角度  距离
 
+
+
+
+
+
 #define RX_BUFFER_SIZE  64
 
 uint8_t rx_buffer[RX_BUFFER_SIZE];
@@ -77,6 +82,7 @@ char safe_buffer[RX_BUFFER_SIZE];
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 void DataProcess_Task(void);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -123,14 +129,14 @@ int main(void)
     motor_init(Right_Motor);
     HAL_TIM_Base_Start_IT(&htim4);
     HAL_TIM_Encoder_Start(&htim3,TIM_CHANNEL_ALL);
-    Speed_PID_Init(&speed_pid, 15.0f, 1.3f, 0.0f, 3599, 2500);
-    Position_PID_Init(&position_pid, 0.10f, 0.0f, 0.0f, 130, 0);
+    Speed_PID_Init(&speed_pid, 10.0f, 1.2f, 0.0f, 3599, 2500);
+    Position_PID_Init(&position_pid, 0.08f, 0.0f, 0.0f, 130, 0);
     position_pid.target = 1400;
     //speed_pid.target = 50;
 	HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rx_buffer, RX_BUFFER_SIZE);
 
-// 可选：关闭半传输中断，防止接收一半就触发回调
-__HAL_DMA_DISABLE_IT(huart1.hdmarx, DMA_IT_HT);
+	// 可选：关闭半传输中断，防止接收一半就触发回调
+	__HAL_DMA_DISABLE_IT(huart1.hdmarx, DMA_IT_HT);
 
     //24V电压90%占空比编码器输出值为230
     /* USER CODE END 2 */
@@ -224,8 +230,17 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         __HAL_TIM_SET_COUNTER(&htim3, 0);
         position_pid.feedback = Encoder_TotalCnt;
 
+			
+			 // 闭环关闭时，只更新编码器，不做PID输出   //现在的方案回零速度环也关了，或者也可以改成回零时候速度环开着
+			//但是开速度环有个问题  堵转时候积分会一致累加  不如开环
+        if (position_loop_enable == 0 || speed_loop_enable == 0)
+        {
+            return;
+        }
+				
         speed_pid.target = Position_PID_Calc(&position_pid);
-
+				
+			
 
         PWM = Speed_PID_Calc(&speed_pid);
         if(PWM > 0)
@@ -244,7 +259,24 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 
 
- 
+ void PID_Clear(void)
+{
+    position_pid.target = 0;
+    position_pid.feedback = 0;
+    position_pid.err = 0;
+    position_pid.last_err = 0;
+    position_pid.integral = 0;
+    position_pid.output = 0;
+
+    speed_pid.target = 0;
+    speed_pid.feedback = 0;
+    speed_pid.err = 0;
+    speed_pid.last_err = 0;
+    speed_pid.integral = 0;
+    speed_pid.output = 0;
+
+    PWM = 0;
+}
 
 
 void DataProcess_Task(void)
@@ -292,7 +324,8 @@ void DataProcess_Task(void)
         case 'A':
             if (sscanf(safe_buffer, "A_position:%f", &target_angle) == 1)
             {
-                position_pid.target = (uint32_t)(target_angle / 360.0f * 2800.0f);
+                position_pid.target = (int32_t)(-(target_angle / 360.0f * 2800.0f));
+							//将输入取反 以满足上位机给定数值增大而Z轴向下
             }
             break;
 						
