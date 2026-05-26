@@ -15,13 +15,6 @@ void motor_init(uint8_t motor_id)
     }
 
 
-    motor_ctrl(motor_id, DIR_FORWARD, 500);
-    HAL_Delay(1000);
-
-    motor_ctrl(motor_id, DIR_BACKWARD, 500);
-    HAL_Delay(1000);
-
-
     motor_ctrl(motor_id, DIR_FORWARD, 0);
 }
 
@@ -47,9 +40,18 @@ void motor_ctrl(uint8_t motor_id, uint8_t direction, uint16_t speed)
         
          __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, speed);
     }
-    else if (motor_id == 2)
+    else if (motor_id == Left_Motor)
     {
+        if (direction == DIR_FORWARD)
+        {
+            HAL_GPIO_WritePin(motor1_dir_GPIO_Port, motor1_dir_Pin, GPIO_PIN_SET);
+        }
+        else
+        {
+            HAL_GPIO_WritePin(motor1_dir_GPIO_Port, motor1_dir_Pin, GPIO_PIN_RESET);
+        }
 
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, speed);
     }
 }
 

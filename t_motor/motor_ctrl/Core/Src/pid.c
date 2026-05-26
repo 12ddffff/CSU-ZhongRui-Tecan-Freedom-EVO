@@ -1,8 +1,5 @@
 #include "pid.h"
 
-extern uint16_t Encoder_NewCnt;
-extern int32_t Encoder_TotalCnt;
-
 void Speed_PID_Init(Speed_PID_TypeDef *pid, float Kp, float Ki, float Kd, int32_t max_out, int32_t max_i)
 {
     pid->Kp = Kp;
