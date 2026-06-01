@@ -10,8 +10,8 @@
 #define Left_Motor   0   //左路电机
 #define Right_Motor  1   //右路电机
 
-#define Z_HOME_PWM              500     // 回零PWM，建议低速低力矩
-#define Z_BACKOFF_PWM           250     // 回退PWM
+#define Z_HOME_PWM              600     // 回零PWM，建议低速低力矩
+#define Z_BACKOFF_PWM           350     // 回退PWM
 #define Z_HOME_TIMEOUT_MS       10000    // 最大回零时间
 #define Z_STALL_CHECK_MS        500      // 每50ms检查一次编码器变化
 #define Z_STALL_CONFIRM_COUNT   10       // 连续5次几乎不动才认为堵转
