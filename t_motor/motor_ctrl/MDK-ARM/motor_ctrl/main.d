@@ -7,14 +7,14 @@ motor_ctrl\main.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_def.h
 motor_ctrl\main.o: ../Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f1xx.h
 motor_ctrl\main.o: ../Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f103xb.h
 motor_ctrl\main.o: ../Drivers/CMSIS/Include/core_cm3.h
-motor_ctrl\main.o: E:\KEIL\MDK539\MDK\ARM\ARMCC\Bin\..\include\stdint.h
+motor_ctrl\main.o: I:\Keil\ARM\ARMCC\Bin\..\include\stdint.h
 motor_ctrl\main.o: ../Drivers/CMSIS/Include/cmsis_version.h
 motor_ctrl\main.o: ../Drivers/CMSIS/Include/cmsis_compiler.h
 motor_ctrl\main.o: ../Drivers/CMSIS/Include/cmsis_armcc.h
 motor_ctrl\main.o: ../Drivers/CMSIS/Device/ST/STM32F1xx/Include/system_stm32f1xx.h
 motor_ctrl\main.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal.h
 motor_ctrl\main.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy/stm32_hal_legacy.h
-motor_ctrl\main.o: E:\KEIL\MDK539\MDK\ARM\ARMCC\Bin\..\include\stddef.h
+motor_ctrl\main.o: I:\Keil\ARM\ARMCC\Bin\..\include\stddef.h
 motor_ctrl\main.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_rcc_ex.h
 motor_ctrl\main.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_gpio.h
 motor_ctrl\main.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_gpio_ex.h
@@ -34,5 +34,5 @@ motor_ctrl\main.o: ../Core/Inc/usart.h
 motor_ctrl\main.o: ../Core/Inc/gpio.h
 motor_ctrl\main.o: ../Core/Inc/motor.h
 motor_ctrl\main.o: ../Core/Inc/pid.h
-motor_ctrl\main.o: E:\KEIL\MDK539\MDK\ARM\ARMCC\Bin\..\include\stdio.h
-motor_ctrl\main.o: E:\KEIL\MDK539\MDK\ARM\ARMCC\Bin\..\include\string.h
+motor_ctrl\main.o: I:\Keil\ARM\ARMCC\Bin\..\include\stdio.h
+motor_ctrl\main.o: I:\Keil\ARM\ARMCC\Bin\..\include\string.h

@@ -33,19 +33,30 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef enum
-{
-    CONTROL_MODE_POSITION = 0,
-    CONTROL_MODE_SPEED
-} Control_Mode_TypeDef;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define ENCODER_CPR       2800.0f
-#define RX_BUFFER_SIZE    64U
-#define MAX_SPEED_TARGET  230.0f
+#define ENCODER_CPR               2800.0f
+#define RX_BUFFER_SIZE            64U
+
+#define STATUS_SEND_PERIOD_MS     20U
+#define DATA_PROCESS_PERIOD_MS    15U
+
+#define SPEED_KP_INIT             10.0f
+#define SPEED_KI_INIT             1.2f
+#define SPEED_KD_INIT             0.0f
+#define SPEED_MAX_PWM             3599
+#define SPEED_MAX_INTEGRAL        2500
+
+#define POSITION_KP_INIT          0.08f
+#define POSITION_KI_INIT          0.0f
+#define POSITION_KD_INIT          0.0f
+#define POSITION_MAX_SPEED        130
+#define POSITION_MAX_INTEGRAL     0
+
+#define DEFAULT_TARGET_ANGLE_DEG  180.0f
 
 /* USER CODE END PD */
 
@@ -57,24 +68,24 @@ typedef enum
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-volatile int16_t  Encoder_NewCnt;
+volatile int16_t Encoder_NewCnt;
 volatile int32_t Encoder_TotalCnt = 0;
 volatile float R_S = 0.0f;
+
 Speed_PID_TypeDef speed_pid;
 Position_PID_TypeDef position_pid;
+
 int16_t PWM = 0;
 uint32_t uart_dma_tick = 0;
 uint32_t data_process_tick = 0;
-char tx_buffer[64];
-float angle = 0;
-float target_angle = 0;
+
+char tx_buffer[96];
+float angle = 0.0f;
+float target_angle = DEFAULT_TARGET_ANGLE_DEG;
 
 uint8_t rx_buffer[RX_BUFFER_SIZE];
-
 volatile uint16_t uart_rx_length = 0;
 volatile uint8_t uart_rx_frame_ready = 0;
-volatile Control_Mode_TypeDef control_mode = CONTROL_MODE_POSITION;
-
 char safe_buffer[RX_BUFFER_SIZE];
 /* USER CODE END PV */
 
@@ -82,8 +93,9 @@ char safe_buffer[RX_BUFFER_SIZE];
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 void DataProcess_Task(void);
-static float Clamp_Float(float value, float min_value, float max_value);
+void PID_Clear(void);
 static int32_t AngleToEncoderCount(float angle_deg);
+static float EncoderCountToAngle(int32_t encoder_count);
 static void UART_StartReceiveToIdle(void);
 /* USER CODE END PFP */
 
@@ -128,36 +140,44 @@ int main(void)
     MX_TIM4_Init();
     MX_USART1_UART_Init();
     /* USER CODE BEGIN 2 */
-    motor_init(Right_Motor);
-    HAL_TIM_Base_Start_IT(&htim4);
-    HAL_TIM_Encoder_Start(&htim3,TIM_CHANNEL_ALL);
-    Speed_PID_Init(&speed_pid, 15.0f, 1.3f, 0.0f, 3599, 2500);
-    Position_PID_Init(&position_pid, 0.10f, 0.0f, 0.0f, 130, 0);
-    target_angle = 180.0f;
-    position_pid.target = AngleToEncoderCount(target_angle);
-    //speed_pid.target = 50;
-    UART_StartReceiveToIdle();
+    Speed_PID_Init(&speed_pid,
+                   SPEED_KP_INIT,
+                   SPEED_KI_INIT,
+                   SPEED_KD_INIT,
+                   SPEED_MAX_PWM,
+                   SPEED_MAX_INTEGRAL);
+    Position_PID_Init(&position_pid,
+                      POSITION_KP_INIT,
+                      POSITION_KI_INIT,
+                      POSITION_KD_INIT,
+                      POSITION_MAX_SPEED,
+                      POSITION_MAX_INTEGRAL);
 
-    //24V电压90%占空比编码器输出值为230
+    HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
+    HAL_TIM_Base_Start_IT(&htim4);
+    motor_init(Right_Motor);
+
+    target_angle = DEFAULT_TARGET_ANGLE_DEG;
+    position_pid.target = -AngleToEncoderCount(target_angle);
+    UART_StartReceiveToIdle();
     /* USER CODE END 2 */
 
     /* Infinite loop */
     /* USER CODE BEGIN WHILE */
     while (1)
     {
-
-        if (HAL_GetTick() - uart_dma_tick >= 20)
+        if (HAL_GetTick() - uart_dma_tick >= STATUS_SEND_PERIOD_MS)
         {
             uart_dma_tick = HAL_GetTick();
 
             if (huart1.gState == HAL_UART_STATE_READY)
             {
+                int tx_len;
                 int32_t speed_feedback;
                 int32_t speed_target;
                 int32_t position_feedback;
                 float speed_r_s;
                 float current_target_angle;
-                int tx_len;
 
                 __disable_irq();
                 speed_feedback = speed_pid.feedback;
@@ -167,10 +187,13 @@ int main(void)
                 current_target_angle = target_angle;
                 __enable_irq();
 
-                angle = (float)position_feedback / ENCODER_CPR * 360.0f;
+                angle = EncoderCountToAngle(position_feedback);
                 tx_len = snprintf(tx_buffer, sizeof(tx_buffer), "pid:%ld,%ld,%.2f,%.2f,%.2f\n",
-                                  (long)speed_feedback, (long)speed_target,
-                                  speed_r_s, angle, current_target_angle);
+                                  (long)speed_feedback,
+                                  (long)speed_target,
+                                  speed_r_s,
+                                  angle,
+                                  current_target_angle);
                 if (tx_len > 0)
                 {
                     if (tx_len >= (int)sizeof(tx_buffer))
@@ -182,10 +205,9 @@ int main(void)
             }
         }
 
-        if (HAL_GetTick() - data_process_tick >= 15)
+        if (HAL_GetTick() - data_process_tick >= DATA_PROCESS_PERIOD_MS)
         {
             data_process_tick = HAL_GetTick();
-
             DataProcess_Task();
         }
         /* USER CODE END WHILE */
@@ -235,65 +257,66 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-//每5ms中断一次
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-
-    if (htim->Instance == TIM4)
+    if (htim->Instance != TIM4)
     {
-        Encoder_NewCnt = (int16_t)__HAL_TIM_GET_COUNTER(&htim3);
-        speed_pid.feedback = Encoder_NewCnt;
-        R_S = (float)Encoder_NewCnt / 5.0f / ENCODER_CPR * 1000.0f;
-        //只读一相的上升沿和下降沿
-        //5ms读到的数值除以5，再除以2800(一圈的输出值),乘1000，结果是转/s
-        //PID运算就用5ms读数值去闭环，不用换算，要显示转速时候再换
-        Encoder_TotalCnt += Encoder_NewCnt;
+        return;
+    }
 
-        __HAL_TIM_SET_COUNTER(&htim3, 0);
-        position_pid.feedback = Encoder_TotalCnt;
+    Encoder_NewCnt = (int16_t)__HAL_TIM_GET_COUNTER(&htim3);
+    speed_pid.feedback = Encoder_NewCnt;
+    R_S = (float)Encoder_NewCnt / 5.0f / ENCODER_CPR * 1000.0f;
+    Encoder_TotalCnt += Encoder_NewCnt;
 
-        if (control_mode == CONTROL_MODE_POSITION)
-        {
-            speed_pid.target = Position_PID_Calc(&position_pid);
-        }
+    __HAL_TIM_SET_COUNTER(&htim3, 0);
+    position_pid.feedback = Encoder_TotalCnt;
 
+    if (position_loop_enable == 0 || speed_loop_enable == 0)
+    {
+        return;
+    }
 
-        PWM = Speed_PID_Calc(&speed_pid);
-        if(PWM >= 0)
-        {
-            motor_ctrl(Right_Motor,DIR_FORWARD,PWM);
-        }
-        else
-        {
-            motor_ctrl(Right_Motor,DIR_BACKWARD,-PWM);
-        }
+    speed_pid.target = Position_PID_Calc(&position_pid);
+    PWM = Speed_PID_Calc(&speed_pid);
 
+    if (PWM >= 0)
+    {
+        motor_ctrl(Right_Motor, DIR_FORWARD, PWM);
+    }
+    else
+    {
+        motor_ctrl(Right_Motor, DIR_BACKWARD, -PWM);
     }
 }
 
-
-
-
-
- 
-
-
-static float Clamp_Float(float value, float min_value, float max_value)
+void PID_Clear(void)
 {
-    if (value < min_value)
-    {
-        return min_value;
-    }
-    if (value > max_value)
-    {
-        return max_value;
-    }
-    return value;
+    position_pid.target = 0;
+    position_pid.feedback = 0;
+    position_pid.err = 0;
+    position_pid.last_err = 0;
+    position_pid.integral = 0;
+    position_pid.output = 0;
+
+    speed_pid.target = 0;
+    speed_pid.feedback = 0;
+    speed_pid.err = 0;
+    speed_pid.last_err = 0;
+    speed_pid.integral = 0;
+    speed_pid.output = 0;
+
+    PWM = 0;
 }
 
 static int32_t AngleToEncoderCount(float angle_deg)
 {
     return (int32_t)(angle_deg / 360.0f * ENCODER_CPR);
+}
+
+static float EncoderCountToAngle(int32_t encoder_count)
+{
+    return (float)encoder_count / ENCODER_CPR * 360.0f;
 }
 
 static void UART_StartReceiveToIdle(void)
@@ -331,9 +354,9 @@ void DataProcess_Task(void)
         case 'T':
             if (sscanf(parse_buffer, "T_speed:%f", &target) == 1)
             {
-                target = Clamp_Float(target, -MAX_SPEED_TARGET, MAX_SPEED_TARGET);
                 __disable_irq();
-                control_mode = CONTROL_MODE_SPEED;
+                position_loop_enable = 0;
+                speed_loop_enable = 1;
                 speed_pid.target = (int32_t)target;
                 speed_pid.integral = 0;
                 __enable_irq();
@@ -348,6 +371,13 @@ void DataProcess_Task(void)
                 speed_pid.integral = 0;
                 __enable_irq();
             }
+            else if (sscanf(parse_buffer, "P_position:%f", &target) == 1)
+            {
+                __disable_irq();
+                position_pid.Kp = target;
+                position_pid.integral = 0;
+                __enable_irq();
+            }
             break;
 
         case 'I':
@@ -356,6 +386,13 @@ void DataProcess_Task(void)
                 __disable_irq();
                 speed_pid.Ki = target;
                 speed_pid.integral = 0;
+                __enable_irq();
+            }
+            else if (sscanf(parse_buffer, "I_position:%f", &target) == 1)
+            {
+                __disable_irq();
+                position_pid.Ki = target;
+                position_pid.integral = 0;
                 __enable_irq();
             }
             break;
@@ -368,30 +405,23 @@ void DataProcess_Task(void)
                 speed_pid.integral = 0;
                 __enable_irq();
             }
+            else if (sscanf(parse_buffer, "D_position:%f", &target) == 1)
+            {
+                __disable_irq();
+                position_pid.Kd = target;
+                position_pid.integral = 0;
+                __enable_irq();
+            }
             break;
 
         case 'A':
             if (sscanf(parse_buffer, "A_position:%f", &target) == 1)
             {
-                target = Clamp_Float(target, 0.0f, 360.0f);
                 __disable_irq();
-                control_mode = CONTROL_MODE_POSITION;
+                position_loop_enable = 1;
+                speed_loop_enable = 1;
                 target_angle = target;
-                position_pid.target = AngleToEncoderCount(target);
-                position_pid.integral = 0;
-                speed_pid.integral = 0;
-                __enable_irq();
-            }
-            break;
-
-        case 'R':
-            if (sscanf(parse_buffer, "R_position:%f", &target) == 1)
-            {
-                int32_t delta_position = AngleToEncoderCount(target);
-                __disable_irq();
-                control_mode = CONTROL_MODE_POSITION;
-                position_pid.target = Encoder_TotalCnt + delta_position;
-                target_angle = (float)position_pid.target / ENCODER_CPR * 360.0f;
+                position_pid.target = -AngleToEncoderCount(target_angle);
                 position_pid.integral = 0;
                 speed_pid.integral = 0;
                 __enable_irq();
@@ -403,30 +433,29 @@ void DataProcess_Task(void)
     }
 }
 
-
-
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-    if (huart == &huart1)
+    if (huart != &huart1)
     {
-        uint16_t rx_length = Size;
-        if (rx_length >= RX_BUFFER_SIZE)
-        {
-            rx_length = RX_BUFFER_SIZE - 1;
-        }
-
-        if (uart_rx_frame_ready == 0)
-        {
-            memcpy(safe_buffer, rx_buffer, rx_length);
-            safe_buffer[rx_length] = '\0';
-            uart_rx_length = rx_length;
-            uart_rx_frame_ready = 1;
-        }
-
-        UART_StartReceiveToIdle();
+        return;
     }
-}
 
+    if (Size >= RX_BUFFER_SIZE)
+    {
+        Size = RX_BUFFER_SIZE - 1;
+    }
+
+    if (uart_rx_frame_ready == 0)
+    {
+        memcpy(safe_buffer, rx_buffer, Size);
+        safe_buffer[Size] = '\0';
+        uart_rx_length = Size;
+        uart_rx_frame_ready = 1;
+    }
+
+    memset(rx_buffer, 0, RX_BUFFER_SIZE);
+    UART_StartReceiveToIdle();
+}
 /* USER CODE END 4 */
 
 
