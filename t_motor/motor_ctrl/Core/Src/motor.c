@@ -1,8 +1,11 @@
 #include "motor.h"
 
-volatile uint8_t position_loop_enable = 1;
-volatile uint8_t speed_loop_enable = 1;
-volatile uint8_t z_homed = 0;
+Motor_State_TypeDef z_motor;
+
+static int32_t MotorAbsI32(int32_t value)
+{
+    return (value < 0) ? -value : value;
+}
 
 void motor_init(uint8_t motor_id)
 {
@@ -19,16 +22,38 @@ void motor_init(uint8_t motor_id)
         return;
     }
 
-    position_loop_enable = 0;
-    speed_loop_enable = 0;
-    z_homed = 0;
+    z_motor.position_loop_enable = 0;
+    z_motor.speed_loop_enable = 0;
+    z_motor.z_homed = 0;
 
     motor_ctrl(motor_id, DIR_FORWARD, 0);
     PID_Clear();
 
     __HAL_TIM_SET_COUNTER(&htim3, 0);
-    Encoder_NewCnt = 0;
-    Encoder_TotalCnt = 0;
+    z_motor.encoder_delta = 0;
+    z_motor.encoder_total = 0;
+    z_motor.speed_rps = 0.0f;
+    z_motor.current_angle_deg = 0.0f;
+    z_motor.target_angle_deg = 0.0f;
+}
+
+void motor_home(uint8_t motor_id)
+{
+    if (motor_id != Left_Motor && motor_id != Right_Motor)
+    {
+        return;
+    }
+
+    z_motor.position_loop_enable = 0;
+    z_motor.speed_loop_enable = 0;
+    z_motor.z_homed = 0;
+
+    motor_ctrl(motor_id, DIR_FORWARD, 0);
+    PID_Clear();
+
+    __HAL_TIM_SET_COUNTER(&htim3, 0);
+    z_motor.encoder_delta = 0;
+    z_motor.encoder_total = 0;
 
     HAL_Delay(100);
 
@@ -36,7 +61,7 @@ void motor_init(uint8_t motor_id)
 
     uint32_t start_time = HAL_GetTick();
     uint32_t last_check_time = HAL_GetTick();
-    int32_t last_encoder_cnt = Encoder_TotalCnt;
+    int32_t last_encoder_cnt = z_motor.encoder_total;
     uint8_t stall_count = 0;
 
     while (1)
@@ -44,9 +69,9 @@ void motor_init(uint8_t motor_id)
         if (HAL_GetTick() - start_time > Z_HOME_TIMEOUT_MS)
         {
             motor_ctrl(motor_id, DIR_FORWARD, 0);
-            position_loop_enable = 0;
-            speed_loop_enable = 0;
-            z_homed = 0;
+            z_motor.position_loop_enable = 0;
+            z_motor.speed_loop_enable = 0;
+            z_motor.z_homed = 0;
             return;
         }
 
@@ -54,11 +79,11 @@ void motor_init(uint8_t motor_id)
         {
             last_check_time = HAL_GetTick();
 
-            int32_t now_encoder_cnt = Encoder_TotalCnt;
+            int32_t now_encoder_cnt = z_motor.encoder_total;
             int32_t delta = now_encoder_cnt - last_encoder_cnt;
             last_encoder_cnt = now_encoder_cnt;
 
-            if (delta >= 0 && delta < Z_STALL_DELTA)
+            if (MotorAbsI32(delta) < Z_STALL_DELTA)
             {
                 stall_count++;
             }
@@ -84,14 +109,14 @@ void motor_init(uint8_t motor_id)
     HAL_Delay(200);
 
     __HAL_TIM_SET_COUNTER(&htim3, 0);
-    Encoder_NewCnt = 0;
-    Encoder_TotalCnt = 0;
+    z_motor.encoder_delta = 0;
+    z_motor.encoder_total = 0;
 
     PID_Clear();
 
-    z_homed = 1;
-    position_loop_enable = 1;
-    speed_loop_enable = 1;
+    z_motor.z_homed = 1;
+    z_motor.position_loop_enable = 0;
+    z_motor.speed_loop_enable = 0;
 }
 
 void motor_ctrl(uint8_t motor_id, uint8_t direction, uint16_t speed)

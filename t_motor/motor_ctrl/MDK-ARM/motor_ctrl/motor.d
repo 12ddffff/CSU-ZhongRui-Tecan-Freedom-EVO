@@ -29,4 +29,5 @@ motor_ctrl\motor.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_pwr.h
 motor_ctrl\motor.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim.h
 motor_ctrl\motor.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim_ex.h
 motor_ctrl\motor.o: ../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h
+motor_ctrl\motor.o: ../Core/Inc/pid.h
 motor_ctrl\motor.o: ../Core/Inc/tim.h

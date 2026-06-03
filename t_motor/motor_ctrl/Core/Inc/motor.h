@@ -2,6 +2,7 @@
 #define _MOTOR_H
 
 #include "main.h"
+#include "pid.h"
 #include "tim.h"
 
 #define DIR_FORWARD   1U
@@ -21,13 +22,28 @@
 #define Z_STALL_DELTA            2
 #define Z_BACKOFF_TIME_MS        200U
 
-extern volatile uint8_t position_loop_enable;
-extern volatile uint8_t speed_loop_enable;
-extern volatile uint8_t z_homed;
-extern volatile int16_t Encoder_NewCnt;
-extern volatile int32_t Encoder_TotalCnt;
+typedef struct
+{
+    Speed_PID_TypeDef speed_pid;
+    Position_PID_TypeDef position_pid;
+
+    volatile int16_t encoder_delta;
+    volatile int32_t encoder_total;
+    volatile float speed_rps;
+    volatile int16_t pwm;
+
+    float current_angle_deg;
+    float target_angle_deg;
+
+    volatile uint8_t position_loop_enable;
+    volatile uint8_t speed_loop_enable;
+    volatile uint8_t z_homed;
+} Motor_State_TypeDef;
+
+extern Motor_State_TypeDef z_motor;
 
 void motor_init(uint8_t motor_id);
+void motor_home(uint8_t motor_id);
 void motor_ctrl(uint8_t motor_id, uint8_t direction, uint16_t speed);
 void PID_Clear(void);
 

@@ -40,6 +40,8 @@
 /* USER CODE BEGIN PD */
 #define ENCODER_CPR               2800.0f
 #define RX_BUFFER_SIZE            64U
+#define Z_AXIS_ENCODER_SIGN       (-1)
+#define AUTO_HOME_ON_BOOT         1U
 
 #define STATUS_SEND_PERIOD_MS     20U
 #define DATA_PROCESS_PERIOD_MS    15U
@@ -49,12 +51,16 @@
 #define SPEED_KD_INIT             0.0f
 #define SPEED_MAX_PWM             3599
 #define SPEED_MAX_INTEGRAL        2500
+#define SPEED_TARGET_LIMIT        230.0f
 
 #define POSITION_KP_INIT          0.08f
 #define POSITION_KI_INIT          0.0f
 #define POSITION_KD_INIT          0.0f
 #define POSITION_MAX_SPEED        130
 #define POSITION_MAX_INTEGRAL     0
+#define POSITION_TARGET_LIMIT_DEG 3600.0f
+#define POSITION_DEADBAND_COUNT   4
+#define SPEED_STOP_DEADBAND_COUNT 2
 
 #define DEFAULT_TARGET_ANGLE_DEG  180.0f
 
@@ -68,21 +74,10 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-volatile int16_t Encoder_NewCnt;
-volatile int32_t Encoder_TotalCnt = 0;
-volatile float R_S = 0.0f;
-
-Speed_PID_TypeDef speed_pid;
-Position_PID_TypeDef position_pid;
-
-int16_t PWM = 0;
 uint32_t uart_dma_tick = 0;
 uint32_t data_process_tick = 0;
 
 char tx_buffer[96];
-float angle = 0.0f;
-float target_angle = DEFAULT_TARGET_ANGLE_DEG;
-
 uint8_t rx_buffer[RX_BUFFER_SIZE];
 volatile uint16_t uart_rx_length = 0;
 volatile uint8_t uart_rx_frame_ready = 0;
@@ -96,6 +91,8 @@ void DataProcess_Task(void);
 void PID_Clear(void);
 static int32_t AngleToEncoderCount(float angle_deg);
 static float EncoderCountToAngle(int32_t encoder_count);
+static float ClampFloat(float value, float min_value, float max_value);
+static int32_t AbsI32(int32_t value);
 static void UART_StartReceiveToIdle(void);
 /* USER CODE END PFP */
 
@@ -140,13 +137,13 @@ int main(void)
     MX_TIM4_Init();
     MX_USART1_UART_Init();
     /* USER CODE BEGIN 2 */
-    Speed_PID_Init(&speed_pid,
+    Speed_PID_Init(&z_motor.speed_pid,
                    SPEED_KP_INIT,
                    SPEED_KI_INIT,
                    SPEED_KD_INIT,
                    SPEED_MAX_PWM,
                    SPEED_MAX_INTEGRAL);
-    Position_PID_Init(&position_pid,
+    Position_PID_Init(&z_motor.position_pid,
                       POSITION_KP_INIT,
                       POSITION_KI_INIT,
                       POSITION_KD_INIT,
@@ -157,8 +154,19 @@ int main(void)
     HAL_TIM_Base_Start_IT(&htim4);
     motor_init(Right_Motor);
 
-    target_angle = DEFAULT_TARGET_ANGLE_DEG;
-    position_pid.target = -AngleToEncoderCount(target_angle);
+#if AUTO_HOME_ON_BOOT
+    motor_home(Right_Motor);
+#endif
+
+    z_motor.target_angle_deg = DEFAULT_TARGET_ANGLE_DEG;
+    z_motor.position_pid.target = AngleToEncoderCount(z_motor.target_angle_deg);
+#if AUTO_HOME_ON_BOOT
+    if (z_motor.z_homed != 0)
+    {
+        z_motor.position_loop_enable = 1;
+        z_motor.speed_loop_enable = 1;
+    }
+#endif
     UART_StartReceiveToIdle();
     /* USER CODE END 2 */
 
@@ -175,25 +183,24 @@ int main(void)
                 int tx_len;
                 int32_t speed_feedback;
                 int32_t speed_target;
-                int32_t position_feedback;
-                float speed_r_s;
-                float current_target_angle;
+                float speed_rps;
+                float current_angle_deg;
+                float target_angle_deg;
 
                 __disable_irq();
-                speed_feedback = speed_pid.feedback;
-                speed_target = speed_pid.target;
-                position_feedback = position_pid.feedback;
-                speed_r_s = R_S;
-                current_target_angle = target_angle;
+                speed_feedback = z_motor.speed_pid.feedback;
+                speed_target = z_motor.speed_pid.target;
+                speed_rps = z_motor.speed_rps;
+                current_angle_deg = z_motor.current_angle_deg;
+                target_angle_deg = z_motor.target_angle_deg;
                 __enable_irq();
 
-                angle = EncoderCountToAngle(position_feedback);
                 tx_len = snprintf(tx_buffer, sizeof(tx_buffer), "pid:%ld,%ld,%.2f,%.2f,%.2f\n",
                                   (long)speed_feedback,
                                   (long)speed_target,
-                                  speed_r_s,
-                                  angle,
-                                  current_target_angle);
+                                  speed_rps,
+                                  current_angle_deg,
+                                  target_angle_deg);
                 if (tx_len > 0)
                 {
                     if (tx_len >= (int)sizeof(tx_buffer))
@@ -264,59 +271,102 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         return;
     }
 
-    Encoder_NewCnt = (int16_t)__HAL_TIM_GET_COUNTER(&htim3);
-    speed_pid.feedback = Encoder_NewCnt;
-    R_S = (float)Encoder_NewCnt / 5.0f / ENCODER_CPR * 1000.0f;
-    Encoder_TotalCnt += Encoder_NewCnt;
+    z_motor.encoder_delta = (int16_t)__HAL_TIM_GET_COUNTER(&htim3);
+    z_motor.speed_pid.feedback = z_motor.encoder_delta;
+    z_motor.speed_rps = (float)z_motor.encoder_delta / 5.0f / ENCODER_CPR * 1000.0f;
+    z_motor.encoder_total += z_motor.encoder_delta;
 
     __HAL_TIM_SET_COUNTER(&htim3, 0);
-    position_pid.feedback = Encoder_TotalCnt;
+    z_motor.position_pid.feedback = z_motor.encoder_total;
+    z_motor.current_angle_deg = EncoderCountToAngle(z_motor.position_pid.feedback);
 
-    if (position_loop_enable == 0 || speed_loop_enable == 0)
+    if (z_motor.speed_loop_enable == 0)
     {
         return;
     }
 
-    speed_pid.target = Position_PID_Calc(&position_pid);
-    PWM = Speed_PID_Calc(&speed_pid);
-
-    if (PWM >= 0)
+    if (z_motor.position_loop_enable != 0)
     {
-        motor_ctrl(Right_Motor, DIR_FORWARD, PWM);
+        int32_t position_error = z_motor.position_pid.target - z_motor.position_pid.feedback;
+
+        if (AbsI32(position_error) <= POSITION_DEADBAND_COUNT)
+        {
+            z_motor.position_pid.integral = 0;
+            z_motor.position_pid.last_err = 0;
+            z_motor.speed_pid.target = 0;
+            z_motor.speed_pid.integral = 0;
+
+            if (AbsI32(z_motor.speed_pid.feedback) <= SPEED_STOP_DEADBAND_COUNT)
+            {
+                z_motor.speed_pid.output = 0;
+                z_motor.pwm = 0;
+                motor_ctrl(Right_Motor, DIR_FORWARD, 0);
+                return;
+            }
+        }
+        else
+        {
+            z_motor.speed_pid.target = Position_PID_Calc(&z_motor.position_pid);
+        }
+    }
+
+    z_motor.pwm = Speed_PID_Calc(&z_motor.speed_pid);
+
+    if (z_motor.pwm >= 0)
+    {
+        motor_ctrl(Right_Motor, DIR_FORWARD, z_motor.pwm);
     }
     else
     {
-        motor_ctrl(Right_Motor, DIR_BACKWARD, -PWM);
+        motor_ctrl(Right_Motor, DIR_BACKWARD, -z_motor.pwm);
     }
 }
 
 void PID_Clear(void)
 {
-    position_pid.target = 0;
-    position_pid.feedback = 0;
-    position_pid.err = 0;
-    position_pid.last_err = 0;
-    position_pid.integral = 0;
-    position_pid.output = 0;
+    z_motor.position_pid.target = 0;
+    z_motor.position_pid.feedback = 0;
+    z_motor.position_pid.err = 0;
+    z_motor.position_pid.last_err = 0;
+    z_motor.position_pid.integral = 0;
+    z_motor.position_pid.output = 0;
 
-    speed_pid.target = 0;
-    speed_pid.feedback = 0;
-    speed_pid.err = 0;
-    speed_pid.last_err = 0;
-    speed_pid.integral = 0;
-    speed_pid.output = 0;
+    z_motor.speed_pid.target = 0;
+    z_motor.speed_pid.feedback = 0;
+    z_motor.speed_pid.err = 0;
+    z_motor.speed_pid.last_err = 0;
+    z_motor.speed_pid.integral = 0;
+    z_motor.speed_pid.output = 0;
 
-    PWM = 0;
+    z_motor.pwm = 0;
 }
 
 static int32_t AngleToEncoderCount(float angle_deg)
 {
-    return (int32_t)(angle_deg / 360.0f * ENCODER_CPR);
+    return (int32_t)(angle_deg / 360.0f * ENCODER_CPR * (float)Z_AXIS_ENCODER_SIGN);
 }
 
 static float EncoderCountToAngle(int32_t encoder_count)
 {
-    return (float)encoder_count / ENCODER_CPR * 360.0f;
+    return (float)encoder_count / ENCODER_CPR * 360.0f * (float)Z_AXIS_ENCODER_SIGN;
+}
+
+static float ClampFloat(float value, float min_value, float max_value)
+{
+    if (value < min_value)
+    {
+        return min_value;
+    }
+    if (value > max_value)
+    {
+        return max_value;
+    }
+    return value;
+}
+
+static int32_t AbsI32(int32_t value)
+{
+    return (value < 0) ? -value : value;
 }
 
 static void UART_StartReceiveToIdle(void)
@@ -354,11 +404,13 @@ void DataProcess_Task(void)
         case 'T':
             if (sscanf(parse_buffer, "T_speed:%f", &target) == 1)
             {
+                target = ClampFloat(target, -SPEED_TARGET_LIMIT, SPEED_TARGET_LIMIT);
                 __disable_irq();
-                position_loop_enable = 0;
-                speed_loop_enable = 1;
-                speed_pid.target = (int32_t)target;
-                speed_pid.integral = 0;
+                z_motor.position_loop_enable = 0;
+                z_motor.speed_loop_enable = 1;
+                z_motor.speed_pid.target = (int32_t)target;
+                z_motor.speed_pid.integral = 0;
+                z_motor.speed_pid.last_err = 0;
                 __enable_irq();
             }
             break;
@@ -367,15 +419,15 @@ void DataProcess_Task(void)
             if (sscanf(parse_buffer, "P_speed:%f", &target) == 1)
             {
                 __disable_irq();
-                speed_pid.Kp = target;
-                speed_pid.integral = 0;
+                z_motor.speed_pid.Kp = target;
+                z_motor.speed_pid.integral = 0;
                 __enable_irq();
             }
             else if (sscanf(parse_buffer, "P_position:%f", &target) == 1)
             {
                 __disable_irq();
-                position_pid.Kp = target;
-                position_pid.integral = 0;
+                z_motor.position_pid.Kp = target;
+                z_motor.position_pid.integral = 0;
                 __enable_irq();
             }
             break;
@@ -384,15 +436,15 @@ void DataProcess_Task(void)
             if (sscanf(parse_buffer, "I_speed:%f", &target) == 1)
             {
                 __disable_irq();
-                speed_pid.Ki = target;
-                speed_pid.integral = 0;
+                z_motor.speed_pid.Ki = target;
+                z_motor.speed_pid.integral = 0;
                 __enable_irq();
             }
             else if (sscanf(parse_buffer, "I_position:%f", &target) == 1)
             {
                 __disable_irq();
-                position_pid.Ki = target;
-                position_pid.integral = 0;
+                z_motor.position_pid.Ki = target;
+                z_motor.position_pid.integral = 0;
                 __enable_irq();
             }
             break;
@@ -401,15 +453,15 @@ void DataProcess_Task(void)
             if (sscanf(parse_buffer, "D_speed:%f", &target) == 1)
             {
                 __disable_irq();
-                speed_pid.Kd = target;
-                speed_pid.integral = 0;
+                z_motor.speed_pid.Kd = target;
+                z_motor.speed_pid.integral = 0;
                 __enable_irq();
             }
             else if (sscanf(parse_buffer, "D_position:%f", &target) == 1)
             {
                 __disable_irq();
-                position_pid.Kd = target;
-                position_pid.integral = 0;
+                z_motor.position_pid.Kd = target;
+                z_motor.position_pid.integral = 0;
                 __enable_irq();
             }
             break;
@@ -417,14 +469,56 @@ void DataProcess_Task(void)
         case 'A':
             if (sscanf(parse_buffer, "A_position:%f", &target) == 1)
             {
+                target = ClampFloat(target, -POSITION_TARGET_LIMIT_DEG, POSITION_TARGET_LIMIT_DEG);
                 __disable_irq();
-                position_loop_enable = 1;
-                speed_loop_enable = 1;
-                target_angle = target;
-                position_pid.target = -AngleToEncoderCount(target_angle);
-                position_pid.integral = 0;
-                speed_pid.integral = 0;
+                z_motor.position_loop_enable = 1;
+                z_motor.speed_loop_enable = 1;
+                z_motor.target_angle_deg = target;
+                z_motor.position_pid.target = AngleToEncoderCount(z_motor.target_angle_deg);
+                z_motor.position_pid.integral = 0;
+                z_motor.position_pid.last_err = 0;
+                z_motor.speed_pid.integral = 0;
+                z_motor.speed_pid.last_err = 0;
                 __enable_irq();
+            }
+            break;
+
+        case 'M':
+            if (sscanf(parse_buffer, "M_speed:%f", &target) == 1)
+            {
+                target = ClampFloat(target, 0.0f, (float)MOTOR_PWM_MAX);
+                __disable_irq();
+                z_motor.speed_pid.max_output = (int32_t)target;
+                z_motor.speed_pid.integral = 0;
+                __enable_irq();
+            }
+            else if (sscanf(parse_buffer, "M_position:%f", &target) == 1)
+            {
+                target = ClampFloat(target, 0.0f, SPEED_TARGET_LIMIT);
+                __disable_irq();
+                z_motor.position_pid.max_output = (int32_t)target;
+                z_motor.position_pid.integral = 0;
+                z_motor.speed_pid.integral = 0;
+                __enable_irq();
+            }
+            break;
+
+        case 'S':
+            if (strcmp(parse_buffer, "S_stop") == 0)
+            {
+                __disable_irq();
+                z_motor.position_loop_enable = 0;
+                z_motor.speed_loop_enable = 0;
+                PID_Clear();
+                __enable_irq();
+                motor_ctrl(Right_Motor, DIR_FORWARD, 0);
+            }
+            break;
+
+        case 'Z':
+            if (strcmp(parse_buffer, "Z_home") == 0)
+            {
+                motor_home(Right_Motor);
             }
             break;
 

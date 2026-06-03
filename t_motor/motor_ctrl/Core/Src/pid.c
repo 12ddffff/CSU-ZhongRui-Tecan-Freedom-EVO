@@ -89,4 +89,3 @@ int32_t Position_PID_Calc(Position_PID_TypeDef *pid)
 
     return pid->output;
 }
-
